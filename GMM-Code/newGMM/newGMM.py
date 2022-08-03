@@ -8,7 +8,7 @@ Created on Tue Aug  2 14:40:21 2022
 
 import numpy as np
 import scipy.stats as stats
-
+import time
 
 # generate data from a Bayesian Gaussian mixture model
 # the variance are all set to 1
@@ -44,7 +44,7 @@ def GMM_initializer(y,K,u,theta):
     z0=np.array(z0)
     return theta0,z0,u0
 
-# evaluate log-likelihood on a batch
+# evaluate log-likelihood on a batch (p(y,z|u,theta))
 # y,z are batches
 def batch_log_likelihood(y,z,K,u,theta):
     log_likelihood=0
@@ -103,7 +103,7 @@ def sample_z(y,z,K,u,theta):
         new_z[i]=new_zi
     return new_z
 
-# sample normal menas
+# sample normal means
 def sample_u(y,z,K):
     new_u=np.array([1. for i in range(0,K)])
     for i in range(0,K):
@@ -169,6 +169,7 @@ def copy_generator(y,z,K,u,theta,batch_size):
 # sample them according to their copies
 # use mh step
 def sample_global_param(y,z,K,u,theta,u_copy,theta_copy):
+    '''
     # first, sample u
     # use random walk metropolis
     new_u=np.random.normal(0,0.1,len(u))+u
@@ -183,18 +184,24 @@ def sample_global_param(y,z,K,u,theta,u_copy,theta_copy):
     v=np.log(v)
     if v> alpha:
         new_u=u
+    '''
+    # sample directly from a Gibbs step
+    #new_u=np.random.normal(0,1,len(u))
+    #new_u=new_u*np.sqrt(1/(len(u_copy)+1))+(sum(u_copy))/(len(u_copy)+1)
+    new_u=sum(u_copy)/len(u_copy)
+    #new_u=[stats.norm.rvs(sum(u_copy)[i]/(len(u_copy)+1),1/(len(u_copy)+1),1)[0] for i in range(0,len(u))]
     
     # then sample theta
     # again, use metropolis
     # proprosal: dir(1+theta)
-    
+    '''
     # proposal distribution is a projected random walk Metropolis
     ratio=0
     theta_trans=np.log(theta/theta[len(theta)-1])[0:len(theta)-1]
     new_theta_trans=np.random.normal(0,0.1,len(theta_trans))+theta_trans
     new_theta=np.exp(new_theta_trans)/(1+sum(np.exp(new_theta_trans)))
     new_theta=np.append(new_theta,1-sum(new_theta))
-    print('new theta:',new_theta)
+    #print('new theta:',new_theta)
     #new_theta=np.random.dirichlet(1+theta,1)[0]
     upper=np.array([stats.dirichlet.logpdf(theta_copy[k],1+new_theta) for k in range(0,theta_copy.shape[0])])
     lower=np.array([stats.dirichlet.logpdf(theta_copy[k],1+theta) for k in range(0,theta_copy.shape[0])])
@@ -207,6 +214,8 @@ def sample_global_param(y,z,K,u,theta,u_copy,theta_copy):
     v=np.log(v)
     if v> alpha:
         new_theta=theta
+        '''
+    new_theta=sum(theta_copy)/len(theta_copy)
     return new_u, new_theta
     
     
@@ -288,11 +297,12 @@ def novel_batched_GMM_Gibbs(y,z,K,u,theta,n,batch_size):
     post_u=[]
     post_theta=[]
     u_copy,theta_copy=copy_generator(y,z,K,u,theta,batch_size)
-    theta_copy=np.array([[0.5,0.25,0.25] for i in range(0,batch_size)])
+    theta_copy=np.array([[0.5,0.25,0.25] for i in range(0,batch_num)])
     # specify the weight for RSGS
     prob=np.array([1/3,1/3,1/3])
     # 1/3 for updating theta, 1/3 for updating thetas, 1/3 for updating zs
     for i in range(0,n):
+        start=time.time()
         print(f'iteration: {i}')
         group=np.random.choice([0,1,2],1,True,prob)[0]
         # update theta
@@ -301,25 +311,36 @@ def novel_batched_GMM_Gibbs(y,z,K,u,theta,n,batch_size):
             print(f'u: {u}')
             
             post_u.append(u)
-            theta=np.array([0.5,0.25,0.25])
+            #theta=np.array([0.5,0.25,0.25])
             print(f'theta: {theta}')
             post_theta.append(theta)
         # update thetas
         if group==1:
             tau=np.random.choice(np.arange(batch_num),1,True)[0]
-            y_batch=y[tau*batch_size:(tau+1)*batch_size].copy()
-            z_batch=z[tau*batch_size:(tau+1)*batch_size].copy()
+            index=np.arange(tau*batch_size,(tau+1)*batch_size)
+            #index=np.random.choice(np.arange(len(y)),batch_size,False)
+            #y_batch=y[tau*batch_size:(tau+1)*batch_size].copy()
+            #z_batch=z[tau*batch_size:(tau+1)*batch_size].copy()
+            y_batch=y[index].copy()
+            z_batch=z[index].copy()
             u_copy[tau]=mh_sample_u(y_batch,z_batch,K,u_copy[tau],theta_copy[tau],u)
             #theta_copy[tau]=mh_sample_theta(y_batch,z_batch,K,u_copy[tau],theta_copy[tau],batch_num,theta)
             
         # update z
         if group==2:
             tau=np.random.choice(np.arange(batch_num),1,True)[0]
-            y_batch=y[tau*batch_size:(tau+1)*batch_size].copy()
-            z_batch=z[tau*batch_size:(tau+1)*batch_size].copy()
+            index=np.arange(tau*batch_size,(tau+1)*batch_size)
+            #index=np.random.choice(np.arange(len(y)),batch_size,False)
+            #y_batch=y[tau*batch_size:(tau+1)*batch_size].copy()
+            #z_batch=z[tau*batch_size:(tau+1)*batch_size].copy()
+            y_batch=y[index].copy()
+            z_batch=z[index].copy()
             z_batch=sample_z(y_batch,z_batch,K,u,theta)
-            z[tau*batch_size:(tau+1)*batch_size]=z_batch
-    return post_u,post_theta,z
+            #z[tau*batch_size:(tau+1)*batch_size]=z_batch
+            z[index]=z_batch
+        end=time.time()
+        #print('time used: ',end-start)
+    return post_u,post_theta,z,u_copy,theta_copy
 
 def permute(post_u,post_theta,u,theta):
     if 1:
