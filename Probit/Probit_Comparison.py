@@ -18,7 +18,7 @@ from datetime import datetime
 beta=np.array([-2,1,4])
 #size=10000
 batch_size=125
-n=40000
+n=60000
 
 if __name__ == '__main__':
     
@@ -33,7 +33,7 @@ if __name__ == '__main__':
     # generate data with each size
     size_set=[1000,2500,5000,7500,10000]
     # number of test wrt each size
-    num=8
+    num=12
     t=datetime.now()
     time_list=[t.year,t.month,t.day,t.hour,t.minute,t.second]
     time_list=[str(x) for x in time_list]
@@ -60,15 +60,14 @@ if __name__ == '__main__':
         cov=np.linalg.inv(np.dot(x.T,x)+np.eye(len(beta)))
         covar.append(np.trace(cov)/len(beta))
         for j in range(0,num):
-            
             print(f'size: {size}, experiment: {j}')
             start=time.time()
-            post_beta,post_z=probit_Gibbs(x,y,z0,beta0,2)
+            post_beta,post_z=probit_Gibbs(x,y,z0,beta0,500)
             end=time.time()
             used_time=end-start
             used_time=used_time*4
             start=time.time()
-            our_beta,our_copy,our_z=batch_probit_Gibbs(x,y,z0,beta0,batch_size,n)
+            our_beta,our_copy,our_z=batch_probit_Gibbs(x,y,z0,beta0,batch_size+i*25,n)
             end=time.time()
             our_used_time=end-start
             
