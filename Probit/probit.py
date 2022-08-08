@@ -118,7 +118,10 @@ def sample_z(x,y,z,beta):
     return new_z
 
 def sample_global_param(x,y,z,global_beta,beta_copy):
+    #batch_num=len(beta_copy)
     global_beta=sum(beta_copy)/len(beta_copy)
+    #global_beta=np.random.normal(0,1,len(global_beta))
+    #global_beta=1/(batch_num/4+1)*global_beta+(sum(beta_copy)/4)/(batch_num/4+1)
     return global_beta
 
 # generate copies of theta
@@ -147,6 +150,7 @@ def probit_Gibbs(x,y,z,beta,n):
 
 # n: number of iteration
 def batch_probit_Gibbs(x,y,z,beta,batch_size,n):
+    m=len(y)
     batch_num=int(len(y)/batch_size)
     post_beta=[]
     beta_copy=copy_generator(x,y,z,beta,batch_size)
@@ -164,7 +168,7 @@ def batch_probit_Gibbs(x,y,z,beta,batch_size,n):
         # update thetas
         if group==1:
             tau=np.random.choice(np.arange(batch_num),1,True)[0]
-            index=np.arange(tau*batch_size,(tau+1)*batch_size)
+            index=np.arange(tau*batch_size,max((tau+1)*batch_size,m))
             #index=np.random.choice(np.arange(len(y)),batch_size,False)
             #y_batch=y[tau*batch_size:(tau+1)*batch_size].copy()
             #z_batch=z[tau*batch_size:(tau+1)*batch_size].copy()
@@ -177,7 +181,7 @@ def batch_probit_Gibbs(x,y,z,beta,batch_size,n):
         # update z
         if group==2:
             tau=np.random.choice(np.arange(batch_num),1,True)[0]
-            index=np.arange(tau*batch_size,(tau+1)*batch_size)
+            index=np.arange(tau*batch_size,max(m,(tau+1)*batch_size))
             #index=np.random.choice(np.arange(len(y)),batch_size,False)
             #y_batch=y[tau*batch_size:(tau+1)*batch_size].copy()
             #z_batch=z[tau*batch_size:(tau+1)*batch_size].copy()
@@ -189,4 +193,4 @@ def batch_probit_Gibbs(x,y,z,beta,batch_size,n):
             z[index]=z_batch
         end=time.time()
         #print('time used: ',end-start)
-    return beta,beta_copy,z
+    return post_beta,beta_copy,z
