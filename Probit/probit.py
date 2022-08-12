@@ -57,28 +57,41 @@ def sample_beta(x,y,z,beta):
     #new_beta=beta
     return new_beta
 
+# evaluate joint distribution on a batch
+# up to some normalizing constant
+def evaluator(x,y,z,beta,global_beta,rho):
+    output=stats.multivariate_normal.logpdf(z,np.dot(x,beta),np.eye(len(z)))
+    output=output+stats.multivariate_normal.logpdf(beta,global_beta,rho)
+    return output
+    
+    
+    
+    
 # used in scalable Gibbs computing
 # sample beta with an mh step
-def mh_sample_beta(x,y,z,beta,global_beta):
+# rho: the divergence parameter
+def mh_sample_beta(x,y,z,beta,global_beta,rho):
     dim=beta.shape[0]
-    new_beta=np.random.normal(0,0.4,len(beta))+beta
-    cov=np.linalg.inv(np.dot(x.T,x)+np.eye(dim))
-    mean=np.dot(cov,np.dot(x.T,z))
-    #new_beta=stats.multivariate_normal.rvs(mean,cov,1)
-    ratio=0
-    #ratio=stats.multivariate_normal.logpdf(new_beta,mean,cov)-stats.multivariate_normal.logpdf(beta,mean,cov)
-    #ratio=ratio+stats.multivariate_normal.logpdf(new_beta,global_beta,4*np.eye(len(y)))-stats.multivariate_normal.logpdf(beta,global_beta,4*np.eye(len(y)))
-    #ratio=sum(stats.norm.logpdf(new_beta,global_beta,4)-stats.norm.logpdf(beta,global_beta,4))
-    ratio=ratio+stats.multivariate_normal.logpdf(z,np.dot(x,new_beta),np.eye(len(z)))-stats.multivariate_normal.logpdf(z,np.dot(x,beta),np.eye(len(z)))
-    ratio=ratio+sum(stats.norm.logpdf(new_beta,global_beta,4)-stats.norm.logpdf(beta,global_beta,4))
-    # ratio=ratio+stats.multivariate_normal.logpdf(beta,mean,cov)-stats.multivariate_normal.logpdf(new_beta,mean,cov)
-    ratio=min(ratio,0)
-    u=np.random.uniform(0,1,1)[0]
-    u=np.log(u)
-    if u<=ratio:
-        return new_beta
-    else:
-        return beta
+    # mh step
+    # new_beta=np.random.normal(0,0.2,len(beta))+beta
+    # ratio=0
+    # ratio=evaluator(x,y,z,new_beta,global_beta,rho)-evaluator(x,y,z,beta,global_beta,rho)
+    # ratio=min(ratio,0)
+    # u=np.random.uniform(0,1,1)[0]
+    # u=np.log(u)
+    # if u<=ratio:
+    #     return new_beta
+    # else:
+    #     return beta
+    
+    # Gibbs step
+    cov=np.linalg.inv(np.dot(x.T,x)+np.eye(dim)/(rho**2))
+    mean=np.dot(cov,global_beta/(rho**2)+np.dot(x.T,z))
+    
+    new_beta=stats.multivariate_normal.rvs(mean,cov,1)
+    
+    #new_beta=beta
+    return new_beta
 
 
 
@@ -117,20 +130,24 @@ def sample_z(x,y,z,beta):
             
     return new_z
 
-def sample_global_param(x,y,z,global_beta,beta_copy):
-    #batch_num=len(beta_copy)
-    global_beta=sum(beta_copy)/len(beta_copy)
-    #global_beta=np.random.normal(0,1,len(global_beta))
-    #global_beta=1/(batch_num/4+1)*global_beta+(sum(beta_copy)/4)/(batch_num/4+1)
+# sample theta based on theta_1,..., theta_s
+# rho is the divergence parameter
+def sample_global_param(x,y,z,global_beta,beta_copy,rho):
+    #global_beta=sum(beta_copy)/len(beta_copy)
+    copy_num=len(beta_copy)
+    mean=sum(beta_copy)/(rho**2+copy_num)
+    scale=1/(copy_num/rho**2+1)*np.eye(len(global_beta))
+    global_beta=stats.multivariate_normal.rvs(mean,scale,size=1)
     return global_beta
 
 # generate copies of theta
-def copy_generator(x,y,z,beta,batch_size):
+# rho: divergence parameter
+def copy_generator(x,y,z,beta,rho,batch_size):
     batch_num=len(y)/batch_size
     batch_num=int(batch_num)
     beta_copy=[]
     for i in range(0,batch_num):
-        beta_copy.append(np.random.normal(0,4,len(beta))+beta)
+        beta_copy.append(np.random.normal(0,rho,len(beta))+beta)
     beta_copy=np.array(beta_copy)
     return beta_copy
 
@@ -147,10 +164,32 @@ def probit_Gibbs(x,y,z,beta,n):
         post_beta.append(beta)
     return post_beta,z
 
+# Random Scan Gibbs Sampler
+# every time sample theta|z or a mini-batch of z
+def random_probit_Gibbs(x,y,z,beta,batch_size,n):
+    batch_num=int(len(y)/batch_size)
+    post_beta=[]
+    for i in range(0,n):
+        print('iteration: ',i)
+        # decide sample theta or z
+        toss=np.random.uniform(0,1,1)[0]
+        # sample theta
+        if toss>=0.5:
+            beta=sample_beta(x,y,z,beta)
+            print('beta: ',beta)
+            post_beta.append(beta)
+        if toss<0.5:
+            tau=np.random.choice(np.arange(batch_num),1,True)[0]
+            index=np.arange(tau*batch_size,(tau+1)*batch_size)
+            x_batch=x[index].copy()
+            y_batch=y[index].copy()
+            z_batch=z[index].copy()
+            z_batch=sample_z(x_batch,y_batch,z_batch,beta)
+            z[index]=z_batch
+    return post_beta,z
 
 # n: number of iteration
 def batch_probit_Gibbs(x,y,z,beta,batch_size,n):
-    m=len(y)
     batch_num=int(len(y)/batch_size)
     post_beta=[]
     beta_copy=copy_generator(x,y,z,beta,batch_size)
@@ -168,7 +207,7 @@ def batch_probit_Gibbs(x,y,z,beta,batch_size,n):
         # update thetas
         if group==1:
             tau=np.random.choice(np.arange(batch_num),1,True)[0]
-            index=np.arange(tau*batch_size,max((tau+1)*batch_size,m))
+            index=np.arange(tau*batch_size,(tau+1)*batch_size)
             #index=np.random.choice(np.arange(len(y)),batch_size,False)
             #y_batch=y[tau*batch_size:(tau+1)*batch_size].copy()
             #z_batch=z[tau*batch_size:(tau+1)*batch_size].copy()
@@ -181,7 +220,7 @@ def batch_probit_Gibbs(x,y,z,beta,batch_size,n):
         # update z
         if group==2:
             tau=np.random.choice(np.arange(batch_num),1,True)[0]
-            index=np.arange(tau*batch_size,max(m,(tau+1)*batch_size))
+            index=np.arange(tau*batch_size,(tau+1)*batch_size)
             #index=np.random.choice(np.arange(len(y)),batch_size,False)
             #y_batch=y[tau*batch_size:(tau+1)*batch_size].copy()
             #z_batch=z[tau*batch_size:(tau+1)*batch_size].copy()
@@ -193,4 +232,86 @@ def batch_probit_Gibbs(x,y,z,beta,batch_size,n):
             z[index]=z_batch
         end=time.time()
         #print('time used: ',end-start)
-    return post_beta,beta_copy,z
+    return beta,beta_copy,z
+
+# n: number of iteration
+# Use mini batch gibbs sampler proposed in 2022.8.12
+# rho is the divergence parameter
+def minibatch_probit_Gibbs(x,y,z,beta,batch_size,rho,n):
+    batch_num=int(len(y)/batch_size)
+    post_beta=[]
+    beta_copy=copy_generator(x,y,z,beta,rho,batch_size)
+    # weight for sampling theta,thetas,z and tau
+    prob=np.array([1/4,1/4,1/4,1/4])
+    # tau[s] decides the batch corresponding to theta_s
+    tau=np.arange(batch_num)
+    for i in range(0,n):
+        start=time.time()
+        print(f'iteration: {i}')
+        # choose parameter to update
+        group=np.random.choice([0,1,2,3],1,True,prob)[0]
+        # update theta
+        if group==0:
+            beta=sample_global_param(x,y,z,beta,beta_copy,rho)
+            print(f'beta: {beta}')
+            
+            post_beta.append(beta)
+        # update thetas
+        if group==1:
+            #tau=np.random.choice(np.arange(batch_num),1,True)[0]
+            # select the corresponding batch, s be the index
+            # s is the index of parameter to update
+            s=np.random.choice(np.arange(batch_num),1,True)[0]
+            batch=tau[s]
+            index=np.arange(batch*batch_size,(batch+1)*batch_size)
+            #index=np.random.choice(np.arange(len(y)),batch_size,False)
+            #y_batch=y[tau*batch_size:(tau+1)*batch_size].copy()
+            #z_batch=z[tau*batch_size:(tau+1)*batch_size].copy()
+            x_batch=x[index].copy()
+            y_batch=y[index].copy()
+            z_batch=z[index].copy()
+            beta_copy[s]=mh_sample_beta(x_batch,y_batch,z_batch,beta_copy[s],beta,rho)
+            #theta_copy[tau]=mh_sample_theta(y_batch,z_batch,K,u_copy[tau],theta_copy[tau],batch_num,theta)
+            
+        # update z
+        if group==2:
+            s=np.random.choice(np.arange(batch_num),1,True)[0]
+            batch=tau[s]
+            index=np.arange(batch*batch_size,(batch+1)*batch_size)
+            #index=np.random.choice(np.arange(len(y)),batch_size,False)
+            #y_batch=y[tau*batch_size:(tau+1)*batch_size].copy()
+            #z_batch=z[tau*batch_size:(tau+1)*batch_size].copy()
+            x_batch=x[index].copy()
+            y_batch=y[index].copy()
+            z_batch=z[index].copy()
+            z_batch=sample_z(x_batch,y_batch,z_batch,beta_copy[s])
+            #z[tau*batch_size:(tau+1)*batch_size]=z_batch
+            z[index]=z_batch
+        if group==3:
+            # randomly switch two tau and decide whether to reject
+            index=np.random.choice(np.arange(batch_num),2,False)
+            new_tau=tau.copy()
+            # s: index of tau
+            s0=index[0]
+            s1=index[1]
+            batch0=tau[s0]
+            batch1=tau[s1]
+            index0=np.arange(batch0*batch_size,(batch0+1)*batch_size)
+            index1=np.arange(batch1*batch_size,(batch1+1)*batch_size)
+            ratio=evaluator(x[index0],y[index0],z[index0],beta_copy[s1],beta,rho)
+            ratio=ratio+evaluator(x[index1],y[index1],z[index1],beta_copy[s0],beta,rho)
+            ratio=ratio-evaluator(x[index0],y[index0],z[index0],beta_copy[s0],beta,rho)
+            ratio=ratio-evaluator(x[index1],y[index1],z[index1],beta_copy[s1],beta,rho)
+            
+            new_tau[s0]=batch1
+            new_tau[s1]=batch0
+            ratio=min(ratio,0)
+            u=np.random.uniform(0,1,1)[0]
+            u=np.log(u)
+            if u<=ratio:
+                #print('tau switched!!!!!')
+                tau=new_tau.copy()
+            
+        end=time.time()
+        #print('time used: ',end-start)
+    return post_beta,beta_copy,z,tau
