@@ -15,10 +15,15 @@ import os
 from datetime import datetime
 
 
-beta=np.array([-2,1,4])
+beta=np.array([-2,1,3])
 #size=10000
 batch_size=125
-n=60000
+n=200
+# generate data with each size
+size_set=[1000,2000,2500]
+rho_set=[1,0.8,0.5]
+# number of test wrt each size
+num=4
 
 if __name__ == '__main__':
     
@@ -30,10 +35,7 @@ if __name__ == '__main__':
     # post_theta=np.array(post_theta)
     # post_u,post_theta=permute(post_u,post_theta,u,theta)
     
-    # generate data with each size
-    size_set=[1000,2500,5000,7500,10000]
-    # number of test wrt each size
-    num=12
+    
     t=datetime.now()
     time_list=[t.year,t.month,t.day,t.hour,t.minute,t.second]
     time_list=[str(x) for x in time_list]
@@ -41,92 +43,169 @@ if __name__ == '__main__':
     folder_name=f'BatchProbit{time_list}'
     os.mkdir(folder_name)
     
-    # calculate the mae
-    error=np.zeros((len(size_set),num))
-    our_error=np.zeros((len(size_set),num))
-    # compare variance
-    variance=np.zeros((len(size_set),num))
-    our_variance=np.zeros((len(size_set),num))
-    # compare time
-    timing=np.zeros((len(size_set),num))
-    our_timing=np.zeros((len(size_set),num))
+    # compute mean of error under different dataset
+    total_gibbs_error=np.zeros(len(size_set))
+    total_gibbs_variance=np.zeros(len(size_set))
+    total_gibbs_time=np.zeros(len(size_set))
+    total_MAP_error=np.zeros(len(size_set))
+    total_theo_variance=np.zeros(len(size_set))
     
-    covar=[]
+    # compute mean of error under different dataset
+    total_our_error=np.zeros((len(rho_set),len(size_set)))
+    total_our_variance=np.zeros((len(rho_set),len(size_set)))
+    total_our_time=np.zeros((len(rho_set),len(size_set)))
     
     for i in range(0,len(size_set)):
         size=size_set[i]
-        x,y,z=data_generator(beta,size)
-        beta0,z0=initialize(x,y)
-        cov=np.linalg.inv(np.dot(x.T,x)+np.eye(len(beta)))
-        covar.append(np.trace(cov)/len(beta))
+        our_error=np.zeros((len(rho_set),num))
+        gibbs_error=np.zeros(num)
+        
+        our_variance=np.zeros((len(rho_set),num))
+        gibbs_variance=np.zeros(num)
+        #Theoretical Variance
+        theo_variance=np.zeros(num)
+        
+        our_time=np.zeros((len(rho_set),num))
+        gibbs_time=np.zeros(num)
+        MAP=np.zeros(num)
+        #covar=[]
+        
         for j in range(0,num):
             print(f'size: {size}, experiment: {j}')
-            start=time.time()
-            post_beta,post_z=probit_Gibbs(x,y,z0,beta0,500)
-            end=time.time()
-            used_time=end-start
-            used_time=used_time*4
-            start=time.time()
-            our_beta,our_copy,our_z=batch_probit_Gibbs(x,y,z0,beta0,batch_size+i*25,n)
-            end=time.time()
-            our_used_time=end-start
             
-            # sample post processing
-            #post_u,post_theta=permute(post_u,post_theta,u,theta)
-            #our_u,our_theta=permute(our_u,our_theta,u,theta)
-            # compute posterior var and mean
+            # generate data
+            size=size_set[i]
+            x,y,z=data_generator(beta,size)
+            beta0,z0=initialize(x,y)
+            dim=beta.shape[0]
+            cov=np.linalg.inv(np.dot(x.T,x)+np.eye(dim))
+            est=np.dot(cov,np.dot(x.T,z))
+            
+            # error of MAP
+            MAP[j]=sum(abs(est-beta))
+            # first,gibbs
+            start=time.time()
+            post_beta,post_z=probit_Gibbs(x,y,z0,beta0,10)
+            end=time.time()
+            gibbs_time[j]=end-start
+            
             pu=post_beta[int(0.8*len(post_beta)):]
-            ou=our_beta[int(0.8*len(our_beta)):]
-            #posterior mean
             p_mean=sum(pu)/len(pu)
-            o_mean=sum(ou)/len(ou)
-            # posterior variance
             p_var=sum(np.var(pu,axis=0))
-            o_var=sum(np.var(ou,axis=0))
             
-            # fill in the data
-            error[i,j]=np.sum(abs(p_mean-beta))
-            our_error[i,j]=np.sum(abs(o_mean-beta))
-            variance[i,j]=p_var
-            our_variance[i,j]=o_var
-            timing[i,j]=used_time
-            our_timing[i,j]=our_used_time
+            gibbs_error[j]=np.sum(abs(p_mean-beta))
+            gibbs_variance[j]=p_var
+            theo_variance[j]=np.trace(cov)
+            for k in range(0,len(rho_set)):
+                rho=rho_set[k]
+                print(f'size: {size}, experiment: {j}, rho: {rho_set[k]}')
+                start=time.time()
+                our_beta,our_copy,our_z,tau=minibatch_probit_Gibbs(x, y, z0, beta0, batch_size, rho, n)
+                end=time.time()
+                
+                # record time
+                our_time[k,j]=end-start
+                
+                # calculate error and variance
+                ou=our_beta[int(0.8*len(our_beta)):]
+                o_mean=sum(ou)/len(ou)
+                o_var=sum(np.var(ou,axis=0))
+                
+                # record error and variance
+                our_error[k,j]=np.sum(abs(o_mean-beta))
+                our_variance[k,j]=o_var
+        
+        # plot error
+        plt.plot(gibbs_error,'*-',label='Standard Gibbs')
+        plt.plot(MAP,'*-',label='MAP on full data')
+        for s in range(0,len(rho_set)):
+            plt.plot(our_error[s,:],'*-',label=f'Our Sampler(rho={rho_set[s]})')
+            total_our_error[s,i]=sum(our_error[s,:])/num
+            
+        # add error into total_ array
+        total_gibbs_error[i]=sum(gibbs_error)/len(gibbs_error)
+        total_MAP_error[i]=sum(MAP)/len(MAP)
+        
+        plt.xticks(np.arange(num),np.arange(num))
+        plt.xlabel('Experiment')
+        plt.ylabel('MAE')
+        plt.legend()
+        plt.savefig(f'{folder_name}/Error Comparison_DataSize{size_set[i]}')
+        plt.close('all')
+        
+        
+        
+        # plot variance
+        plt.plot(gibbs_variance,'*-',label='Standard Gibbs')
+        plt.plot(theo_variance,'*-',label='Theoretical Variance')
+        for s in range(0,len(rho_set)):
+            plt.plot(our_variance[s,:],'*-',label=f'Our Sampler(rho={rho_set[s]})')
+            total_our_variance[s,i]=sum(our_variance[s,:])/num
+        
+        total_gibbs_variance[i]=sum(gibbs_variance)/len(gibbs_variance)
+        total_theo_variance[i]=sum(theo_variance)/len(theo_variance)
+        
+        plt.xticks(np.arange(num),np.arange(num))
+        plt.xlabel('Experiment')
+        plt.ylabel('Variance')
+        plt.legend()
+        plt.savefig(f'{folder_name}/Variance Comparison_DataSize{size_set[i]}')
+        plt.close('all')
+        
+        # plot time
+        plt.plot(gibbs_time,'*-',label='Standard Gibbs')
+        #plt.plot(theo_variance,'*-',label='Theoretical Variance')
+        for s in range(0,len(rho_set)):
+            plt.plot(our_time[s,:],'*-',label=f'Our Sampler(rho={rho_set[s]})')
+            total_our_time[s,i]=sum(our_time[s,:])/num
+        total_gibbs_time[i]=sum(gibbs_time)/len(gibbs_time)
+        
+        
+        plt.xticks(np.arange(num),np.arange(num))
+        plt.xlabel('Experiment')
+        plt.ylabel('Used time (second)')
+        plt.legend()
+        plt.savefig(f'{folder_name}/Time Comparison_DataSize{size_set[i]}')
+        plt.close('all')
+
+# plot average error rate under different data size
+# compare with standard gibbs & estimation of MAP under full data
+plt.plot(total_gibbs_error,'*-',label='Standard Gibbs')
+plt.plot(total_MAP_error,'*-',label='MAP with full data')
+for s in range(0,len(rho_set)):
+    plt.plot(total_our_error[s,:],'*-',label=f'Our Sampler(rho={rho_set[s]})')
+plt.xticks(np.arange(num),np.arange(num))
+plt.xlabel('Experiment')
+plt.ylabel('MAE')
+plt.legend()
+plt.savefig(f'{folder_name}/Average Error Comparison')
+plt.close('all')
+
+# plot average variance under different data size
+# compare with standard gibbs & estimation of MAP under full data
+plt.plot(total_gibbs_variance,'*-',label='Standard Gibbs')
+plt.plot(total_theo_variance,'*-',label='Theoretical Var (with full data)')
+for s in range(0,len(rho_set)):
+    plt.plot(total_our_variance[s,:],'*-',label=f'Our Sampler(rho={rho_set[s]})')
+plt.xticks(np.arange(num),np.arange(num))
+plt.xlabel('Experiment')
+plt.ylabel('Variance')
+plt.legend()
+plt.savefig(f'{folder_name}/Average Variance Comparison')
+plt.close('all')
+
+# plot average consumed time under different data size
+# compare with standard gibbs
+plt.plot(total_gibbs_time,'*-',label='Standard Gibbs')
+for s in range(0,len(rho_set)):
+    plt.plot(total_our_time[s,:],'*-',label=f'Our Sampler(rho={rho_set[s]})')
+plt.xticks(np.arange(num),np.arange(num))
+plt.xlabel('Experiment')
+plt.ylabel('Consumed Time(Seconds)')
+plt.legend()
+plt.savefig(f'{folder_name}/Average Time Comparison')
+plt.close('all')
+            
+            
+            
     
-    # save data
-    np.save(f'{folder_name}/err.npy',error)
-    np.save(f'{folder_name}/our_err.npy',our_error)
-    np.save(f'{folder_name}/variance.npy',variance)
-    np.save(f'{folder_name}/our_variance.npy',our_variance)
-    np.save(f'{folder_name}/time.npy',timing)
-    np.save(f'{folder_name}/our_time.npy',our_timing)
-    
-    # plot error
-    plt.plot(np.mean(error,axis=1),'*-',label='Error of standard Gibbs')
-    plt.plot(np.mean(our_error,axis=1),'*-',label='Error of our method')
-    plt.xticks(np.arange(len(size_set)),size_set)
-    plt.xlabel('Data Size')
-    plt.ylabel('Error')
-    plt.legend()
-    plt.savefig(f'{folder_name}/Error Comparison')
-    plt.close('all')
-    
-    # plot variance
-    covar=np.array(covar)
-    plt.plot(covar,'*-',label='Theoretical Variance')
-    plt.plot(np.mean(our_variance,axis=1),'*-',label='Variance of our method')
-    plt.xticks(np.arange(len(size_set)),size_set)
-    plt.xlabel('Data Size')
-    plt.ylabel('Variance')
-    plt.legend()
-    plt.savefig(f'{folder_name}/Variance Comparison')
-    plt.close('all')
-    
-    # plot time
-    plt.plot(np.mean(timing,axis=1),'*-',label='Consumed time of standard Gibbs')
-    plt.plot(np.mean(our_timing,axis=1),'*-',label='Consumed time of our method')
-    plt.xticks(np.arange(len(size_set)),size_set)
-    plt.xlabel('Data Size')
-    plt.ylabel('Average Used Time')
-    plt.legend()
-    plt.savefig(f'{folder_name}/Time Comparison')
-    plt.close('all')
